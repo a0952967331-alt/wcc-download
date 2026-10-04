@@ -12,7 +12,7 @@ Windows 本機工作控制中心免費試用版。
 
 ## 下載
 
-[工作控制中心_Windows本機免費試用版.zip](https://github.com/a0952967331-alt/wcc-download/releases/latest/download/%E5%B7%A5%E4%BD%9C%E6%8E%A7%E5%88%B6%E4%B8%AD%E5%BF%83_Windows%E6%9C%AC%E6%A9%9F%E5%85%8D%E8%B2%BB%E8%A9%A6%E7%94%A8%E7%89%88.zip)
+[下載 工作控制中心 Windows 本機免費試用版（WorkControlCenter-Windows-Free-Trial.zip）](https://github.com/a0952967331-alt/wcc-download/releases/latest/download/WorkControlCenter-Windows-Free-Trial.zip)
 
 這個連結永遠指向最新版本。
 

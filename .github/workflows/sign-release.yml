@@ -37,7 +37,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      ASSET: "工作控制中心_Windows本機免費試用版.zip"
+      ASSET: "WorkControlCenter-Windows-Free-Trial.zip"
+      LABEL: "工作控制中心_Windows本機免費試用版.zip"
       PKG: "Work-Control-Center"
       IDENTITY: "https://github.com/a0952967331-alt/wcc-download/.github/workflows/sign-release.yml@refs/heads/main"
       ISSUER: "https://token.actions.githubusercontent.com"
@@ -111,7 +112,7 @@ jobs:
               assert z.read(f"{pkg}/wcc-package.json") == open("sign/wcc-package.json", "rb").read()
               assert z.read(f"{pkg}/wcc-package.sigstore.json") == bundle
           PY
-          gh release upload "$TAG" "out/$ASSET" --clobber
+          gh release upload "$TAG" "out/$ASSET#$LABEL" --clobber
           mkdir -p readback
           gh release download "$TAG" --pattern "$ASSET" --dir readback
           final=$(sha256sum "out/$ASSET" | cut -d' ' -f1)

@@ -1,0 +1,128 @@
+# The one canonical release signer for 工作控制中心.
+#
+# It does NOT build anything. It authenticates an already-built, already-validated release candidate that was
+# uploaded to a DRAFT release: it keyless-signs the package manifest (Work-Control-Center/wcc-package.json) with
+# this workflow's GitHub Actions OIDC identity, puts the Sigstore bundle inside the same ZIP at
+# Work-Control-Center/wcc-package.sigstore.json and replaces the draft's asset.
+#
+# Signer identity (what the program's updater accepts, nothing else):
+#   https://github.com/a0952967331-alt/wcc-download/.github/workflows/sign-release.yml@refs/heads/main
+#   issuer https://token.actions.githubusercontent.com
+# No signing key or secret is stored anywhere.
+name: sign-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Draft release tag to sign (e.g. v0.6.3)"
+        required: true
+        type: string
+      candidate_sha256:
+        description: "SHA-256 of the locally validated candidate ZIP"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # read the draft release, replace its asset
+  id-token: write   # GitHub Actions OIDC token for Sigstore keyless signing
+
+concurrency:
+  group: sign-release
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ASSET: "工作控制中心_Windows本機免費試用版.zip"
+      PKG: "Work-Control-Center"
+      IDENTITY: "https://github.com/a0952967331-alt/wcc-download/.github/workflows/sign-release.yml@refs/heads/main"
+      ISSUER: "https://token.actions.githubusercontent.com"
+      TAG: ${{ inputs.tag }}
+      WANT_SHA256: ${{ inputs.candidate_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check inputs and identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "bad tag: $TAG"; exit 1; }
+          [[ "$WANT_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "bad candidate_sha256"; exit 1; }
+          [[ "https://github.com/$GITHUB_WORKFLOW_REF" == "$IDENTITY" ]] || { echo "unexpected workflow ref: $GITHUB_WORKFLOW_REF"; exit 1; }
+
+      - name: Locate the draft release and download the candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" == "true" ]] || { echo "$TAG is not a draft release"; exit 1; }
+          mkdir -p in sign out
+          gh release download "$TAG" --pattern "$ASSET" --dir in
+          echo "$WANT_SHA256  in/$ASSET" | sha256sum --check --strict
+
+      - name: Extract only the package manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, zipfile
+          from pathlib import PurePosixPath
+          asset, pkg, tag = os.environ["ASSET"], os.environ["PKG"], os.environ["TAG"]
+          with zipfile.ZipFile(f"in/{asset}") as z:
+              names = [i.filename for i in z.infolist() if not i.is_dir()]
+              tops = {PurePosixPath(n).parts[0] for n in names}
+              assert tops == {pkg}, f"unexpected top folders: {tops}"
+              assert f"{pkg}/wcc-package.sigstore.json" not in names, "candidate is already signed"
+              data = z.read(f"{pkg}/wcc-package.json")
+          import json
+          m = json.loads(data)
+          assert m.get("version") == tag[1:], f"manifest version {m.get('version')!r} != tag {tag}"
+          open("sign/wcc-package.json", "wb").write(data)
+          PY
+          sha256sum sign/wcc-package.json
+
+      - name: Keyless-sign the manifest (Sigstore, GitHub Actions OIDC) and verify
+        # sigstore/gh-action-sigstore-python v3.5.0 (sigstore-python 4.5.0)
+        uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9
+        with:
+          inputs: sign/wcc-package.json
+          verify: true
+          verify-cert-identity: ${{ env.IDENTITY }}
+          verify-oidc-issuer: ${{ env.ISSUER }}
+          upload-signing-artifacts: false
+          release-signing-artifacts: false
+
+      - name: Put the bundle inside the package and replace the draft asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, shutil, zipfile
+          asset, pkg = os.environ["ASSET"], os.environ["PKG"]
+          shutil.copyfile(f"in/{asset}", f"out/{asset}")
+          bundle = open("sign/wcc-package.json.sigstore.json", "rb").read()
+          with zipfile.ZipFile(f"out/{asset}", "a", zipfile.ZIP_DEFLATED) as z:   # existing entries are not rewritten
+              z.writestr(f"{pkg}/wcc-package.sigstore.json", bundle)
+          with zipfile.ZipFile(f"out/{asset}") as z:
+              assert z.testzip() is None
+              assert z.read(f"{pkg}/wcc-package.json") == open("sign/wcc-package.json", "rb").read()
+              assert z.read(f"{pkg}/wcc-package.sigstore.json") == bundle
+          PY
+          gh release upload "$TAG" "out/$ASSET" --clobber
+          mkdir -p readback
+          gh release download "$TAG" --pattern "$ASSET" --dir readback
+          final=$(sha256sum "out/$ASSET" | cut -d' ' -f1)
+          back=$(sha256sum "readback/$ASSET" | cut -d' ' -f1)
+          [[ "$final" == "$back" ]] || { echo "readback mismatch"; exit 1; }
+          echo "FINAL_SHA256=$final"
+          {
+            echo "### $TAG signed"
+            echo "- candidate SHA-256: \`$WANT_SHA256\`"
+            echo "- manifest SHA-256: \`$(sha256sum sign/wcc-package.json | cut -d' ' -f1)\`"
+            echo "- final SHA-256: \`$final\`"
+            echo "- identity: \`$IDENTITY\`"
+            echo "- issuer: \`$ISSUER\`"
+          } >> "$GITHUB_STEP_SUMMARY"
